@@ -6,15 +6,16 @@ const cors = require('cors');
 const app = express();
 const server = http.createServer(app);
 
-// ==================== НАСТРОЙКА CORS ====================
-// ⚠️ КРИТИЧЕСКИ ВАЖНО: Разрешаем подключения с ваших доменов
+// ==================== КРИТИЧЕСКИ ВАЖНО: НАСТРОЙКА CORS ====================
+// ✅ Разрешаем подключения с вашего GitHub Pages сайта
 const io = socketIO(server, {
     cors: {
         origin: [
-            "https://server-f0a1.onrender.com",  // 1. Ваш сервер
-            "https://your-game-website.onrender.com", // 2. Ваш сайт (когда задеплоите)
-            "http://localhost:3000",             // 3. Локальная разработка
-            "http://localhost:8080"              // 4. Локальный сайт
+            "https://tymbochka50-art.github.io",  // ⬅️ Ваш сайт на GitHub Pages
+            "https://server-f0a1.onrender.com",   // ⬅️ Ваш сервер
+            "http://localhost:3000",              // ⬅️ Локальная разработка
+            "http://127.0.0.1:5500",              // ⬅️ Live Server (VS Code)
+            "http://localhost:8080"               // ⬅️ Альтернативный порт
         ],
         methods: ["GET", "POST"],
         credentials: true
@@ -22,11 +23,13 @@ const io = socketIO(server, {
     transports: ['websocket', 'polling']
 });
 
+// ✅ Настройка CORS для обычных HTTP запросов
 app.use(cors({
     origin: [
+        "https://tymbochka50-art.github.io",
         "https://server-f0a1.onrender.com",
-        "https://your-game-website.onrender.com",
         "http://localhost:3000",
+        "http://127.0.0.1:5500",
         "http://localhost:8080"
     ],
     credentials: true
@@ -64,7 +67,7 @@ function updateOnlineCount() {
 }
 
 // ==================== API ЭНДПОИНТЫ ====================
-// ✅ Health Check (обязательно для Render)
+// ✅ Health Check
 app.get('/health', (req, res) => {
     res.json({ 
         status: 'ok', 
@@ -81,9 +84,11 @@ app.get('/status', (req, res) => {
         players: gameState.onlineCount,
         uptime: Math.floor((new Date() - gameState.startedAt) / 1000),
         version: '1.0.0',
-        maxPlayers: 50,
         serverTime: new Date().toISOString(),
-        chests: gameState.chests
+        allowedOrigins: [
+            "https://tymbochka50-art.github.io",
+            "https://server-f0a1.onrender.com"
+        ]
     });
 });
 
@@ -100,13 +105,28 @@ app.get('/players', (req, res) => {
     res.json({ players: playersList, count: playersList.length });
 });
 
-// ✅ Сброс сундуков (для тестирования)
+// ✅ Сброс сундуков
 app.post('/reset-chests', (req, res) => {
     Object.keys(gameState.chests).forEach(key => {
         gameState.chests[key].stones = 0;
     });
     io.emit('chestsReset', gameState.chests);
     res.json({ message: 'Сундуки сброшены', chests: gameState.chests });
+});
+
+// ✅ Корневой эндпоинт
+app.get('/', (req, res) => {
+    res.json({
+        message: '🎮 Game Server is running!',
+        endpoints: {
+            health: '/health',
+            status: '/status',
+            players: '/players',
+            docs: 'Check console for Socket.io events'
+        },
+        server: 'https://server-f0a1.onrender.com',
+        client: 'https://tymbochka50-art.github.io'
+    });
 });
 
 // ==================== SOCKET.IO СОБЫТИЯ ====================
@@ -178,7 +198,6 @@ io.on('connection', (socket) => {
             gameState.players[socket.id].rotation = data.rotation;
             gameState.players[socket.id].lastActive = new Date();
             
-            // Отправляем движение всем остальным
             socket.broadcast.emit('playerMoved', {
                 id: socket.id,
                 ...data
@@ -197,7 +216,6 @@ io.on('connection', (socket) => {
             
             console.log(`💎 ${player.username} положил камень в ${data.chestId}`);
             
-            // Отправляем обновления всем
             socket.emit('stonePlaced', {
                 chestId: data.chestId,
                 stonesLeft: player.stones,
@@ -240,17 +258,12 @@ io.on('connection', (socket) => {
             updateOnlineCount();
         }
     });
-    
-    // 📌 7. ОБРАБОТКА ОШИБОК
-    socket.on('error', (error) => {
-        console.error(`❌ Socket error (${socket.id}):`, error);
-    });
 });
 
 // ==================== АВТООЧИСТКА НЕАКТИВНЫХ ====================
 setInterval(() => {
     const now = new Date();
-    const INACTIVE_LIMIT = 10 * 60 * 1000; // 10 минут
+    const INACTIVE_LIMIT = 10 * 60 * 1000;
     
     Object.keys(gameState.players).forEach(id => {
         if (now - gameState.players[id].lastActive > INACTIVE_LIMIT) {
@@ -260,18 +273,17 @@ setInterval(() => {
             updateOnlineCount();
         }
     });
-}, 5 * 60 * 1000); // Проверка каждые 5 минут
+}, 5 * 60 * 1000);
 
 // ==================== ЗАПУСК СЕРВЕРА ====================
-// ⚠️ КРИТИЧЕСКИ ВАЖНО: 0.0.0.0 вместо localhost для облачного хостинга
 server.listen(PORT, '0.0.0.0', () => {
     console.log('='.repeat(50));
-    console.log(`✅ Игровой сервер запущен!`);
+    console.log(`✅ Game Server запущен!`);
+    console.log(`📍 URL: https://server-f0a1.onrender.com`);
     console.log(`📍 Порт: ${PORT}`);
-    console.log(`🌐 Сервер: https://server-f0a1.onrender.com`);
-    console.log(`📊 Health Check: /health`);
-    console.log(`📈 Статус: /status`);
-    console.log(`👥 Игроки: /players`);
+    console.log(`📍 GitHub Pages: https://tymbochka50-art.github.io`);
+    console.log(`📊 Health: /health`);
+    console.log(`📈 Status: /status`);
     console.log('='.repeat(50));
 });
 
