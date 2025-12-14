@@ -135,4 +135,50 @@ io.on('connection', (socket) => {
                 stones: chest.stones
             });
             
-            console.log(`Игрок ${player
+            console.log(`Игрок ${player.username} положил камень в ${data.chestId}`);
+        }
+    });
+    
+    // Запрос количества онлайн
+    socket.on('getOnlineCount', () => {
+        socket.emit('onlineCount', Object.keys(gameState.players).length);
+    });
+    
+    // Отключение игрока
+    socket.on('disconnect', () => {
+        console.log('Отключился:', socket.id);
+        
+        if (gameState.players[socket.id]) {
+            // Сообщаем всем об отключении
+            socket.broadcast.emit('playerLeft', socket.id);
+            
+            // Удаляем из состояния
+            delete gameState.players[socket.id];
+            
+            // Обновляем счетчик
+            updateOnlineCount();
+        }
+    });
+});
+
+// Функция обновления счетчика онлайн
+function updateOnlineCount() {
+    const count = Object.keys(gameState.players).length;
+    io.emit('onlineCount', count);
+}
+
+// Запуск сервера
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`✅ Сервер запущен на порту ${PORT}`);
+    console.log(`📊 API: http://localhost:${PORT}/status`);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+    console.log('Получен SIGTERM, завершаем работу...');
+    server.close(() => {
+        console.log('Сервер остановлен');
+        process.exit(0);
+    });
+});
