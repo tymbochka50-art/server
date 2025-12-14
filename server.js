@@ -6,37 +6,41 @@ const cors = require('cors');
 const app = express();
 const server = http.createServer(app);
 
-// ✅ КРИТИЧЕСКИ ВАЖНО: Настройка CORS для Socket.IO
-// После деплоя замените адреса на ваши реальные URL с Render
+// ==================== НАСТРОЙКА CORS ====================
+// ⚠️ КРИТИЧЕСКИ ВАЖНО: Разрешаем подключения с ваших доменов
 const io = socketIO(server, {
     cors: {
         origin: [
-            "https://your-game-website.onrender.com", // Адрес вашего сайта на Render
-            "http://localhost:3000" // Для локальной разработки
+            "https://server-f0a1.onrender.com",  // 1. Ваш сервер
+            "https://your-game-website.onrender.com", // 2. Ваш сайт (когда задеплоите)
+            "http://localhost:3000",             // 3. Локальная разработка
+            "http://localhost:8080"              // 4. Локальный сайт
         ],
         methods: ["GET", "POST"],
         credentials: true
     },
-    transports: ['websocket', 'polling'] // Улучшает совместимость
+    transports: ['websocket', 'polling']
 });
 
-// ✅ Настройка CORS middleware для обычных HTTP запросов
 app.use(cors({
     origin: [
+        "https://server-f0a1.onrender.com",
         "https://your-game-website.onrender.com",
-        "http://localhost:3000"
+        "http://localhost:3000",
+        "http://localhost:8080"
     ],
     credentials: true
 }));
 
 app.use(express.json());
 
-// ✅ Важно для Render: Используем порт из переменной окружения
+// ==================== КОНСТАНТЫ ====================
 const PORT = process.env.PORT || 3000;
+const MAX_STONES = 5;
 
-// Состояние игры
+// ==================== СОСТОЯНИЕ ИГРЫ ====================
 const gameState = {
-    players: {}, // { socketId: { x, y, z, rotation, username, color, stones: 5 } }
+    players: {},
     chests: {
         chest1: { stones: 0, position: { x: 10, z: 10 } },
         chest2: { stones: 0, position: { x: -10, z: 10 } },
@@ -44,100 +48,99 @@ const gameState = {
         chest4: { stones: 0, position: { x: -10, z: -10 } }
     },
     startedAt: new Date(),
-    maxStonesPerPlayer: 5
+    onlineCount: 0
 };
 
-// Генерация случайного цвета для игрока
+// ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 function getRandomColor() {
-    const colors = [
-        '#3498db', '#e74c3c', '#2ecc71', '#f1c40f',
-        '#9b59b6', '#1abc9c', '#d35400', '#34495e'
-    ];
+    const colors = ['#FF6B6B', '#4ECDC4', '#FFD166', '#06D6A0', '#118AB2', '#EF476F'];
     return colors[Math.floor(Math.random() * colors.length)];
 }
 
-// API эндпоинты
-app.get('/status', (req, res) => {
-    res.json({
-        online: true,
-        players: Object.keys(gameState.players).length,
-        uptime: Math.floor((new Date() - gameState.startedAt) / 1000),
-        version: '1.0.0',
-        serverTime: new Date().toISOString()
-    });
-});
+function updateOnlineCount() {
+    gameState.onlineCount = Object.keys(gameState.players).length;
+    io.emit('onlineCount', gameState.onlineCount);
+    console.log(`👥 Онлайн игроков: ${gameState.onlineCount}`);
+}
 
-app.get('/players', (req, res) => {
-    // Возвращаем только публичные данные об игроках
-    const publicPlayers = {};
-    Object.keys(gameState.players).forEach(id => {
-        const player = gameState.players[id];
-        publicPlayers[id] = {
-            x: player.x,
-            y: player.y,
-            z: player.z,
-            rotation: player.rotation,
-            username: player.username,
-            color: player.color,
-            stones: player.stones
-        };
-    });
-    res.json(publicPlayers);
-});
-
-app.get('/chests', (req, res) => {
-    res.json(gameState.chests);
-});
-
-// Health check для Render
+// ==================== API ЭНДПОИНТЫ ====================
+// ✅ Health Check (обязательно для Render)
 app.get('/health', (req, res) => {
     res.json({ 
         status: 'ok', 
-        players: Object.keys(gameState.players).length,
-        uptime: Math.floor((new Date() - gameState.startedAt) / 1000)
+        players: gameState.onlineCount,
+        uptime: Math.floor((new Date() - gameState.startedAt) / 1000),
+        timestamp: new Date().toISOString()
     });
 });
 
-// Socket.io события
+// ✅ Статус сервера
+app.get('/status', (req, res) => {
+    res.json({
+        online: true,
+        players: gameState.onlineCount,
+        uptime: Math.floor((new Date() - gameState.startedAt) / 1000),
+        version: '1.0.0',
+        maxPlayers: 50,
+        serverTime: new Date().toISOString(),
+        chests: gameState.chests
+    });
+});
+
+// ✅ Список игроков
+app.get('/players', (req, res) => {
+    const playersList = Object.keys(gameState.players).map(id => ({
+        id,
+        username: gameState.players[id].username,
+        x: gameState.players[id].x,
+        z: gameState.players[id].z,
+        stones: gameState.players[id].stones,
+        color: gameState.players[id].color
+    }));
+    res.json({ players: playersList, count: playersList.length });
+});
+
+// ✅ Сброс сундуков (для тестирования)
+app.post('/reset-chests', (req, res) => {
+    Object.keys(gameState.chests).forEach(key => {
+        gameState.chests[key].stones = 0;
+    });
+    io.emit('chestsReset', gameState.chests);
+    res.json({ message: 'Сундуки сброшены', chests: gameState.chests });
+});
+
+// ==================== SOCKET.IO СОБЫТИЯ ====================
 io.on('connection', (socket) => {
-    console.log('Новое подключение:', socket.id);
+    console.log(`🔗 Новое подключение: ${socket.id}`);
     
-    // Инициализация игрока
+    // 📌 1. ИНИЦИАЛИЗАЦИЯ ИГРОКА
     socket.on('initPlayer', (data) => {
-        const { username } = data;
+        const username = data.username || `Игрок_${socket.id.substring(0, 5)}`;
         
-        // Создаем нового игрока
         gameState.players[socket.id] = {
-            x: Math.random() * 20 - 10, // Случайная позиция на карте
+            x: Math.random() * 30 - 15,
             y: 1,
-            z: Math.random() * 20 - 10,
-            rotation: 0,
-            username: username || `Игрок_${socket.id.substring(0, 4)}`,
+            z: Math.random() * 30 - 15,
+            rotation: Math.random() * Math.PI * 2,
+            username: username,
             color: getRandomColor(),
-            stones: gameState.maxStonesPerPlayer,
+            stones: MAX_STONES,
             connectedAt: new Date(),
-            lastUpdate: new Date()
+            lastActive: new Date()
         };
         
         const player = gameState.players[socket.id];
+        console.log(`🎮 ${username} присоединился к игре (${socket.id})`);
         
-        console.log(`Игрок ${player.username} присоединился к игре`);
-        
-        // Отправляем текущее состояние новому игроку
+        // 1. Отправляем данные новому игроку
         socket.emit('initGame', {
             playerId: socket.id,
-            x: player.x,
-            y: player.y,
-            z: player.z,
-            rotation: player.rotation,
-            username: player.username,
-            color: player.color,
-            stones: player.stones,
+            ...player,
             chests: gameState.chests,
             otherPlayers: Object.keys(gameState.players)
                 .filter(id => id !== socket.id)
-                .reduce((obj, id) => {
-                    obj[id] = {
+                .reduce((acc, id) => {
+                    acc[id] = {
                         x: gameState.players[id].x,
                         y: gameState.players[id].y,
                         z: gameState.players[id].z,
@@ -146,11 +149,11 @@ io.on('connection', (socket) => {
                         color: gameState.players[id].color,
                         stones: gameState.players[id].stones
                     };
-                    return obj;
+                    return acc;
                 }, {})
         });
         
-        // Сообщаем всем остальным игрокам о новом игроке
+        // 2. Сообщаем всем о новом игроке
         socket.broadcast.emit('playerJoined', {
             id: socket.id,
             x: player.x,
@@ -162,59 +165,50 @@ io.on('connection', (socket) => {
             stones: player.stones
         });
         
-        // Обновляем счетчик онлайн для всех
+        // 3. Обновляем счетчик
         updateOnlineCount();
     });
     
-    // Движение игрока
+    // 📌 2. ДВИЖЕНИЕ ИГРОКА
     socket.on('playerMove', (data) => {
         if (gameState.players[socket.id]) {
-            // Обновляем позицию игрока
             gameState.players[socket.id].x = data.x;
             gameState.players[socket.id].y = data.y;
             gameState.players[socket.id].z = data.z;
             gameState.players[socket.id].rotation = data.rotation;
-            gameState.players[socket.id].lastUpdate = new Date();
+            gameState.players[socket.id].lastActive = new Date();
             
-            // Пересылаем движение всем остальным игрокам
+            // Отправляем движение всем остальным
             socket.broadcast.emit('playerMoved', {
                 id: socket.id,
-                x: data.x,
-                y: data.y,
-                z: data.z,
-                rotation: data.rotation
+                ...data
             });
         }
     });
     
-    // Положить камень в сундук
+    // 📌 3. ПОЛОЖИТЬ КАМЕНЬ В СУНДУК
     socket.on('placeStone', (data) => {
         const player = gameState.players[socket.id];
         const chest = gameState.chests[data.chestId];
         
         if (player && chest && player.stones > 0) {
-            // Уменьшаем камни у игрока
             player.stones--;
-            
-            // Увеличиваем камни в сундуке
             chest.stones++;
             
-            console.log(`Игрок ${player.username} положил камень в ${data.chestId}. Осталось камней: ${player.stones}`);
+            console.log(`💎 ${player.username} положил камень в ${data.chestId}`);
             
-            // Отправляем подтверждение игроку
+            // Отправляем обновления всем
             socket.emit('stonePlaced', {
                 chestId: data.chestId,
                 stonesLeft: player.stones,
                 chestStones: chest.stones
             });
             
-            // Сообщаем всем об обновлении сундука
             io.emit('chestUpdate', {
                 id: data.chestId,
                 stones: chest.stones
             });
             
-            // Сообщаем всем об обновлении инвентаря игрока
             socket.broadcast.emit('playerInventoryUpdate', {
                 id: socket.id,
                 stones: player.stones
@@ -222,95 +216,76 @@ io.on('connection', (socket) => {
         }
     });
     
-    // Запрос количества онлайн игроков
+    // 📌 4. ЗАПРОС ОНЛАЙН СЧЕТЧИКА
     socket.on('getOnlineCount', () => {
-        socket.emit('onlineCount', Object.keys(gameState.players).length);
+        socket.emit('onlineCount', gameState.onlineCount);
     });
     
-    // Запрос на возобновление камней (для тестирования)
+    // 📌 5. ВОССТАНОВЛЕНИЕ КАМНЕЙ
     socket.on('refillStones', () => {
         if (gameState.players[socket.id]) {
-            gameState.players[socket.id].stones = gameState.maxStonesPerPlayer;
-            
-            socket.emit('stonesRefilled', {
-                stones: gameState.players[socket.id].stones
-            });
-            
-            console.log(`Игроку ${gameState.players[socket.id].username} восстановлены камни`);
+            gameState.players[socket.id].stones = MAX_STONES;
+            socket.emit('stonesRefilled', { stones: MAX_STONES });
         }
     });
     
-    // Отключение игрока
+    // 📌 6. ОТКЛЮЧЕНИЕ ИГРОКА
     socket.on('disconnect', () => {
-        console.log('Отключился:', socket.id);
-        
         if (gameState.players[socket.id]) {
             const username = gameState.players[socket.id].username;
+            console.log(`👋 ${username} покинул игру`);
             
-            // Сообщаем всем об отключении
             socket.broadcast.emit('playerLeft', socket.id);
-            
-            // Удаляем игрока из состояния
             delete gameState.players[socket.id];
-            
-            console.log(`Игрок ${username} покинул игру`);
-            
-            // Обновляем счетчик онлайн
             updateOnlineCount();
         }
     });
     
-    // Обработка ошибок
+    // 📌 7. ОБРАБОТКА ОШИБОК
     socket.on('error', (error) => {
-        console.error('Socket error:', error);
+        console.error(`❌ Socket error (${socket.id}):`, error);
     });
 });
 
-// Функция обновления счетчика онлайн для всех клиентов
-function updateOnlineCount() {
-    const count = Object.keys(gameState.players).length;
-    io.emit('onlineCount', count);
-}
-
-// Очистка неактивных игроков (каждые 5 минут)
+// ==================== АВТООЧИСТКА НЕАКТИВНЫХ ====================
 setInterval(() => {
     const now = new Date();
-    const inactiveTime = 5 * 60 * 1000; // 5 минут
+    const INACTIVE_LIMIT = 10 * 60 * 1000; // 10 минут
     
     Object.keys(gameState.players).forEach(id => {
-        const player = gameState.players[id];
-        if (now - player.lastUpdate > inactiveTime) {
-            console.log(`Удаляем неактивного игрока: ${player.username}`);
-            delete gameState.players[id];
+        if (now - gameState.players[id].lastActive > INACTIVE_LIMIT) {
+            console.log(`🕐 Удаляем неактивного игрока: ${gameState.players[id].username}`);
             io.emit('playerLeft', id);
+            delete gameState.players[id];
             updateOnlineCount();
         }
     });
 }, 5 * 60 * 1000); // Проверка каждые 5 минут
 
-// ✅ КРИТИЧЕСКИ ВАЖНО: Привязываем сервер к `0.0.0.0`, а не `localhost`
-// Это необходимо для работы на облачном хостинге
+// ==================== ЗАПУСК СЕРВЕРА ====================
+// ⚠️ КРИТИЧЕСКИ ВАЖНО: 0.0.0.0 вместо localhost для облачного хостинга
 server.listen(PORT, '0.0.0.0', () => {
-    console.log(`✅ Game server is running on port ${PORT}`);
-    console.log(`📊 Health check: http://localhost:${PORT}/health`);
-    console.log(`📊 Status API: http://localhost:${PORT}/status`);
-    console.log(`📊 Players API: http://localhost:${PORT}/players`);
+    console.log('='.repeat(50));
+    console.log(`✅ Игровой сервер запущен!`);
+    console.log(`📍 Порт: ${PORT}`);
+    console.log(`🌐 Сервер: https://server-f0a1.onrender.com`);
+    console.log(`📊 Health Check: /health`);
+    console.log(`📈 Статус: /status`);
+    console.log(`👥 Игроки: /players`);
+    console.log('='.repeat(50));
 });
 
-// Graceful shutdown
+// ==================== GRACEFUL SHUTDOWN ====================
 process.on('SIGTERM', () => {
-    console.log('Получен SIGTERM, завершаем работу...');
-    
-    // Уведомляем всех игроков о выключении сервера
-    io.emit('serverShutdown', {
-        message: 'Сервер выключается для обслуживания',
-        timestamp: new Date().toISOString()
+    console.log('🔄 Получен SIGTERM, завершаем работу...');
+    io.emit('serverShutdown', { 
+        message: 'Сервер выключается',
+        timestamp: new Date().toISOString() 
     });
     
-    // Даем время на отправку сообщений
     setTimeout(() => {
         server.close(() => {
-            console.log('Сервер остановлен');
+            console.log('🔴 Сервер остановлен');
             process.exit(0);
         });
     }, 1000);
