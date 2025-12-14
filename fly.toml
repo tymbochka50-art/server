@@ -1,0 +1,28 @@
+app = "your-game-server-name"  # Замените на уникальное имя
+primary_region = "fra"         # Франкфурт (или другой регион)
+
+[build]
+  image = "node:18-alpine"
+
+[deploy]
+  strategy = "rolling"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+[[http_service.ports]]
+  port = 80
+  handlers = ["http"]
+
+[[http_service.ports]]
+  port = 443
+  handlers = ["tls", "http"]
+
+[env]
+  NODE_ENV = "production"
+  PORT = "3000"
